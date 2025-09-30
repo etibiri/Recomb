@@ -1,0 +1,4 @@
+name: cmd-blast
+channels: [bioconda, conda-forge, defaults]
+dependencies:
+  - blast

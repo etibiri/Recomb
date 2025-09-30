@@ -1,0 +1,6 @@
+name: cmd-hyphy
+channels: [conda-forge, bioconda]
+dependencies:
+  - hyphy>=2.5,<2.6
+  - python=3.10
+  - click

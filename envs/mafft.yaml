@@ -1,0 +1,7 @@
+name: cmd-mafft
+channels: 
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - mafft

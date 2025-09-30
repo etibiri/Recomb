@@ -1,0 +1,16 @@
+name: base-python
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pandas
+  - biopython
+  - seqkit
+  - r-base=4.3
+  - r-optparse
+  - r-data.table
+  - click
+  - numpy

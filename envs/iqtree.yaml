@@ -1,0 +1,4 @@
+name: cmd-iqtree
+channels: [bioconda, conda-forge, defaults]
+dependencies:
+  - iqtree

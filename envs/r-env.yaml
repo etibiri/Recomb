@@ -1,0 +1,27 @@
+name: cmd-r
+channels: [conda-forge, bioconda]
+dependencies:
+  - r-base>=4.3,<4.4
+  - quarto
+  - r-knitr
+  - r-jsonlite
+  - r-data.table
+  - r-readr
+  - r-dplyr
+  - r-tidyr
+  - r-ggplot2
+  - r-stringr
+  - r-tibble
+  - r-purrr
+  - r-ape
+  - r-phangorn
+  # très souvent requis dans les rapports :
+  - r-ggrepel
+  - r-patchwork
+  - r-cowplot
+  - r-dt
+  - r-scales
+  - r-glue
+  - r-htmltools
+  - r-plotly         # si graphiques interactifs
+  - r-rmarkdown      # utile si ton qmd use des fonctions rmarkdown
