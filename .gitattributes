@@ -1,0 +1,5 @@
+# .gitattributes
+* text=auto eol=lf
+*.R diff=cpp
+*.yaml diff=yaml
+*.yml diff=yaml
