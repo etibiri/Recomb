@@ -1,0 +1,45 @@
+# Minimal, documented configuration for CMD DNA-A recombination analysis.
+
+inputs:
+  dnaA_fasta: "data/dnaA.fasta"         # demonstration dataset
+  metadata:   "data/metadata.tsv"       # columns: sample_id, host, country, year, species (if available)
+  refs_dir:   "data/refs"               # optional reference FASTA files (*.fa|*.fasta|*.fna)
+
+# Fixed seeds for reproducibility across tools/steps
+seeds:
+  cleaning:  1337
+  mafft:     20231
+  masking:   4242
+  hyphy:     9001
+  consensus: 5150
+  blast:     31415
+  iqtree:    27182
+  network:   16180
+
+# Masking parameters passed to scripts/mask_alignment.py
+masking:
+  gap_threshold: 0.5             # mask columns with >50% gap-like characters
+  treat_ambiguous_as_gap: false  # do not treat IUPAC ambiguity as gaps
+
+# Tool options (strings injected as-is)
+tools:
+  mafft_opts: "--adjustdirection --maxiterate 0 --retree 2 --anysymbol"
+  iqtree_opts: "-m GTR+G -bb 1000 -alrt 1000"   # model + supports; adapt if desired
+  hyphy_opts: ""                                 # keep empty unless your runner supports extra flags
+
+# Plot/network settings passed to neighborNet.R
+network:
+  max_tips: 700
+  per_species_cap: 400
+  pdf_w: 10.5
+  pdf_h: 8.5
+
+# Resource presets (tune to your machine/cluster)
+resources:
+  default:
+    mem_mb: 4000       # ~4 GB
+    runtime_min: 60    # soft runtime hint (minutes)
+  heavy:
+    mem_mb: 16000      # ~16 GB
+    runtime_min: 360   # soft runtime hint (minutes)
+
