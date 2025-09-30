@@ -1,0 +1,23 @@
+# sorties du workflow
+results/
+.report/
+dag.png
+dag.svg
+
+# environnements/conda caches
+.conda/
+conda-meta/
+.env/
+*.lock
+
+# OS & editors
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# données lourdes/sensibles
+data/raw/
+*.fastq
+*.bam
+*.log
