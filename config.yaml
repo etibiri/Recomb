@@ -31,7 +31,7 @@ masking:
 tools:
   mafft_opts: "--adjustdirection --maxiterate 0 --retree 2 --anysymbol"
   iqtree_opts: "-m GTR+G -bb 1000 -alrt 1000"   # model + supports; adapt if desired
-  hyphy_opts: ""                                 # keep empty unless your runner supports extra flags
+  hyphy_opts: "--model GTR"
 
 # Plot/network settings passed to neighborNet.R
 network:
@@ -48,4 +48,6 @@ resources:
   heavy:
     mem_mb: 16000      # ~16 GB
     runtime_min: 360   # soft runtime hint (minutes)
+
+  
 
