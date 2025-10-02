@@ -6,6 +6,7 @@ dependencies:
   - r-knitr
   - r-jsonlite
   - r-data.table
+  - r-optparse
   - r-readr
   - r-dplyr
   - r-tidyr
@@ -13,9 +14,8 @@ dependencies:
   - r-stringr
   - r-tibble
   - r-purrr
-  - r-ape
-  - r-phangorn
-  # très souvent requis dans les rapports :
+  - r-ape>=5.8
+  - r-phangorn>=2.11.1
   - r-ggrepel
   - r-patchwork
   - r-cowplot
@@ -25,3 +25,7 @@ dependencies:
   - r-htmltools
   - r-plotly         # si graphiques interactifs
   - r-rmarkdown      # utile si ton qmd use des fonctions rmarkdown
+  - r-codetools
+  - r-igraph
+  - r-cairo
+  - r-png
