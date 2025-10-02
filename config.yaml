@@ -15,6 +15,12 @@ seeds:
   blast:     31415
   iqtree:    27182
   network:   16180
+  min_len:   2200
+  max_N_frac: 0.02
+
+# Alignement
+align: 
+   mafft_opts: "--auto"       # peut être affiné (ex. "--globalpair --maxiterate 1000")
 
 # Masking parameters passed to scripts/mask_alignment.py
 masking:
