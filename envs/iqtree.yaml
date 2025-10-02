@@ -1,4 +1,6 @@
 name: cmd-iqtree
 channels: [bioconda, conda-forge, defaults]
 dependencies:
-  - iqtree
+  - iqtree=2.*       # IQ-TREE v2
+  - python>=3.9
+

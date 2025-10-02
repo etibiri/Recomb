@@ -1,6 +1,11 @@
-name: cmd-hyphy
-channels: [conda-forge, bioconda]
+# envs/hyphy.yaml
+name: hyphy
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
 dependencies:
-  - hyphy>=2.5,<2.6
-  - python=3.10
+  - hyphy>=2.5
+  - python>=3.9
   - click
+  - iqtree=2.*
