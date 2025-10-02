@@ -8,7 +8,7 @@
 import os
 
 configfile: "config.yaml"
-
+shell.executable("/bin/bash")
 # --- Shortcuts from config -----------------------------------------------------
 DATA_FASTA   = config["inputs"]["dnaA_fasta"]
 METADATA_TSV = config["inputs"]["metadata"]
@@ -153,15 +153,17 @@ rule mask_alignment:
 
 # --- HyPhy GARD (produit un JSON) ---------------------------------------------
 # Déclare ce chemin en haut de ton Snakefile avec tes autres constantes :
-# en haut du Snakefile, avec tes autres constantes
-HYPHY_ANALYSES = "external/hyphy-analyses"
+
+# à mettre une seule fois en haut du Snakefile si absent
+#shell.executable("/bin/bash")
 
 rule hyphy_gard:
     input:
-        aln = f"{ALIGN_DIR}/dnaA.masked.fasta",
-        analyses = HYPHY_ANALYSES
+        aln = f"{ALIGN_DIR}/dnaA.masked.fasta"
     output:
         json = f"{RECOMB_DIR}/dnaA.gard.json"
+    params:
+        extra = HYPHY_OPTS  # peut être vide
     threads: 8
     log: log_of("hyphy_gard")
     benchmark: bench_of("hyphy_gard")
@@ -169,52 +171,63 @@ rule hyphy_gard:
     shell:
         r"""
         set -euo pipefail
-        mkdir -p {RECOMB_DIR}
-        TMPDIR=$(mktemp -d)
+
+        outdir="$(dirname "{output.json}")"
+        mkdir -p "$outdir"
+
+        TMPDIR="$(mktemp -d)"
         OUTJSON="$TMPDIR/GARD.json"
 
-        # 1) pointer HyPhy vers les analyses clonées
-        export HYPHY_ANALYSES="{HYPHY_ANALYSES}"
+        # définir HYPHY_ANALYSES si absent, sans expansions fragiles
+        HVAL="$(printenv HYPHY_ANALYSES 2>/dev/null || true)"
+        if [ -z "$HVAL" ] && [ -d "external/hyphy-analyses" ]; then
+          export HYPHY_ANALYSES=external/hyphy-analyses
+        fi
 
-        # 2) choisir le binaire (dans l'env conda)
-        if command -v hyphy >/dev/null 2>&1; then
-          H=hyphy
-        elif command -v hyphy-avx >/dev/null 2>&1; then
-          H=hyphy-avx
+        export TOLERATE_NUMERICAL_ERRORS=1
+
+        if command -v hyphy >/dev/null 2>&1; then H=hyphy
+        elif command -v hyphy-avx >/dev/null 2>&1; then H=hyphy-avx
         else
-          echo "[ERROR] HyPhy introuvable dans l'env conda" > {log}
+          echo "[ERROR] HyPhy introuvable dans l'env conda" > "{log}"
           rm -rf "$TMPDIR"; exit 127
         fi
 
-        echo "[which] $($H --version | head -n1)" > {log}
-        echo "[env] HYPHY_ANALYSES=$HYPHY_ANALYSES" >> {log}
+        $H --version 2>/dev/null | head -n1 | sed 's/^/[which] /' > "{log}" 2>&1
+        echo "[env] HYPHY_ANALYSES=$(printenv HYPHY_ANALYSES 2>/dev/null || echo '')" >> "{log}"
+        echo "[env] TOLERATE_NUMERICAL_ERRORS=$TOLERATE_NUMERICAL_ERRORS" >> "{log}"
+        echo "[cmd] $H gard --alignment {input.aln} --type nucleotide --output $OUTJSON --threads {threads} --model GTR {params.extra}" >> "{log}"
 
-        # 3) GARD : ICI on passe un FICHIER en --output, pas un dossier
-        if ! "$H" gard \
-              --alignment {input.aln} \
-              --type nucleotide \
-              --output "$OUTJSON" \
-              --threads {threads} >> {log} 2>&1; then
-          echo "[ERROR] 'hyphy gard' a échoué" >> {log}
-          rm -rf "$TMPDIR"; exit 1
+        set +e
+        $H gard \
+          --alignment "{input.aln}" \
+          --type nucleotide \
+          --output "$OUTJSON" \
+          --threads {threads} \
+          --model {params.extra} \
+           ENV=TOLERATE_NUMERICAL_ERRORS=1; >> "{log}" 2>&1
+        rc=$?
+        set -e
+
+        if [ -s "$OUTJSON" ]; then
+          mv "$OUTJSON" "{output.json}"
+          echo "[OK] GARD JSON: {output.json}" >> "{log}"
+          rm -rf "$TMPDIR"
+          exit 0
         fi
 
-        # 4) récupérer le JSON
-        if [ -f "$OUTJSON" ]; then
-          mv "$OUTJSON" {output.json}
-        else
-          cand=$(find "$TMPDIR" -maxdepth 2 -type f \( -name '*GARD*.json' -o -name 'GARD.json' \) | head -n1 || true)
-          if [ -n "$cand" ]; then
-            mv "$cand" {output.json}
-          else
-            echo "[ERROR] GARD.json introuvable dans $TMPDIR" >> {log}
-            rm -rf "$TMPDIR"; exit 1
-          fi
+        cand="$(find "$TMPDIR" -maxdepth 2 -type f -name '*GARD*.json' | head -n1 || true)"
+        if [ -n "$cand" ] && [ -s "$cand" ]; then
+          mv "$cand" "{output.json}"
+          echo "[OK] GARD JSON (fallback): {output.json}" >> "{log}"
+          rm -rf "$TMPDIR"
+          exit 0
         fi
 
+        echo "[ERROR] GARD.json introuvable; rc=$rc" >> "{log}"
         rm -rf "$TMPDIR"
+        exit 1
         """
-
 
 
 # --- HyPhy sélection sur fragments (SLAC/FEL/FUBAR/MEME) ----------------------
@@ -501,8 +514,11 @@ rule neighbornet:
     conda: "envs/r-env.yaml"
     shell:
         r"""
+        set -euo pipefail
         mkdir -p {NET_DIR}
-        Rscript scripts/R/neighborNet.R \
+
+        # Lancer le script R
+        if ! Rscript scripts/R/neighborNet.R \
           --aln {input.msa} \
           --out {NET_DIR}/neighborNet \
           --metadata {input.meta} \
@@ -512,8 +528,37 @@ rule neighbornet:
           --seed {params.seed} \
           --pdf-width {params.pdf_w} \
           --pdf-height {params.pdf_h} \
-          > {log} 2>&1
+          > {log} 2>&1; then
+          echo "[WARN] R a retourné un code non nul; on tente de récupérer les fichiers." >> {log}
+        fi
+
+        # Cherche récursivement des sorties plausibles puis normalise les noms
+        find {NET_DIR} -maxdepth 3 -type f -iname '*neighbor*net*.pdf' -o -iname '*network*.pdf' | head -n1 | \
+          xargs -r -I{} mv -f "{}" "{output.pdf}" || true
+        find {NET_DIR} -maxdepth 3 -type f -iname '*neighbor*net*.png' -o -iname '*network*.png' | head -n1 | \
+          xargs -r -I{} mv -f "{}" "{output.png}" || true
+        # le color-map est déjà passé en paramètre, mais on prévoit des variantes
+        if [ ! -s "{output.colors}" ]; then
+          find {NET_DIR} -maxdepth 3 -type f -iname '*taxa*color*.csv' -o -iname '*color*.csv' | head -n1 | \
+            xargs -r -I{} mv -f "{}" "{output.colors}" || true
+        fi
+
+        # Attente courte pour latence FS
+        tries=0
+        while [ $tries -lt 5 ]; do
+          if [ -s "{output.pdf}" ] && [ -s "{output.png}" ] && [ -s "{output.colors}" ]; then
+            echo "[OK] neighborNet outputs présents." >> {log}
+            exit 0
+          fi
+          tries=$((tries+1))
+          sleep 2
+        done
+
+        echo "[ERROR] Fichiers neighborNet manquants. Vérifie le log R: {log}" >> {log}
+        exit 1
         """
+
+
 
 # --- IQ-TREE ML phylogeny -----------------------------------------------------
 rule iqtree_tree:
