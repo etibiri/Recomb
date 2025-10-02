@@ -21,3 +21,4 @@ data/raw/
 *.fastq
 *.bam
 *.log
+.snakemake/*
