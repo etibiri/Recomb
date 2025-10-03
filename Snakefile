@@ -289,21 +289,15 @@ rule gard_to_breaks:
         json = f"{RECOMB_DIR}/dnaA.gard.json"
     output:
         tsv  = f"{RECOMB_DIR}/dnaA.gard_breakpoints.tsv"
-    threads: 1
-    resources:
-        mem_mb=RES_DEFAULT["mem_mb"],
-        runtime=RES_DEFAULT["runtime_min"]
     log: log_of("gard_to_breaks")
-    benchmark: bench_of("gard_to_breaks")
-    conda: "envs/base-python.yaml"
+    conda: "envs/base-python.yaml"   # ou ton env python
     shell:
         r"""
-        mkdir -p {RECOMB_DIR}
-        python scripts/python/gard_to_breaks.py \
-          --in {input.json} \
-          --out {output.tsv} \
-          > {log} 2>&1
+        set -euo pipefail
+        mkdir -p "$(dirname "{output.tsv}")"
+        scripts/python/gard_to_breaks.py "{input.json}" "{output.tsv}" "dnaA" > "{log}" 2>&1
         """
+
 
 # --- Combine events (scaffold) -------------------------------------------------
 rule combine_events:
@@ -325,170 +319,147 @@ rule combine_events:
 
 # --- Consensus breakpoints -----------------------------------------------------
 rule consensus_breakpoints:
-    input:  combined = f"{RECOMB_DIR}/events_all.tsv"
-    output: consensus = f"{RECOMB_DIR}/consensus_breakpoints.tsv"
-    params: seed = SEEDS["consensus"]
+    input:
+        combined = f"{RECOMB_DIR}/events_all.tsv"
+    output:
+        consensus = f"{RECOMB_DIR}/consensus_breakpoints.tsv"
     threads: 1
     resources:
-        mem_mb=RES_DEFAULT["mem_mb"],
-        runtime=RES_DEFAULT["runtime_min"]
+        mem_mb = RES_DEFAULT["mem_mb"],
+        runtime = RES_DEFAULT["runtime_min"]
     log: log_of("consensus_breakpoints")
     benchmark: bench_of("consensus_breakpoints")
     conda: "envs/base-python.yaml"
     shell:
         r"""
-        python scripts/python/consensus_breakpoints.py \
-          --in {input.combined} \
-          --out {output.consensus} \
-          --seed {params.seed} \
-          > {log} 2>&1
+        set -euo pipefail
+
+        python - << 'PY' > "{log}" 2>&1
+import os, re, json
+
+inp  = r"{input.combined}"
+outp = r"{output.consensus}"
+
+if not os.path.isfile(inp):
+    raise SystemExit("[ERROR] Missing input: %s" % inp)
+
+# 1) Essayer d'extraire des breaks depuis events_all.tsv
+breaks = []
+gard_json_path = None
+
+with open(inp, "r") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#SUMMARY"):
+            cols = line.split("\t")
+            # format attendu: #SUMMARY, alignment, gard_json, n_breakpoints, breaks, best_aicc
+            if len(cols) >= 3 and gard_json_path is None:
+                gard_json_path = cols[2].strip()
+            if len(cols) >= 5:
+                raw = cols[4].strip()
+                if raw:
+                    for tok in re.split(r"[,\s]+", raw):
+                        if tok.isdigit():
+                            breaks.append(int(tok))
+        elif line.startswith("#DETAIL"):
+            cols = line.split("\t")
+            if len(cols) >= 4 and cols[-1].isdigit():
+                breaks.append(int(cols[-1]))
+
+# 2) Si pas de breaks trouvés, tenter directement le JSON GARD référencé en SUMMARY
+if not breaks and gard_json_path and os.path.isfile(gard_json_path):
+    try:
+        with open(gard_json_path, "r") as jh:
+            data = json.load(jh)
+        # Schéma HyPhy récent: improvements -> dernière étape contient "breakpoints"
+        imp = data.get("improvements")
+        if isinstance(imp, dict) and imp:
+            last_key = max(int(k) for k in imp.keys())
+            bp = imp[str(last_key)].get("breakpoints", [])
+            flat = []
+            for x in bp:
+                if isinstance(x, list):
+                    flat.extend(x)
+                else:
+                    flat.append(x)
+            for v in flat:
+                try:
+                    breaks.append(int(v))
+                except Exception:
+                    pass
+        # Backups éventuels pour anciens schémas
+        if not breaks:
+            for alt in ("breakpointList", "breakpoints", "bestBreakPoints"):
+                vals = data.get(alt)
+                if isinstance(vals, list):
+                    for v in vals:
+                        try:
+                            breaks.append(int(v))
+                        except Exception:
+                            pass
+    except Exception as e:
+        print("[WARN] fallback JSON parse failed: %s" % str(e))
+
+# 3) Dédupliquer et trier
+breaks = sorted(set(breaks))
+
+# 4) Fusion optionnelle de points proches en mini intervalles
+MERGE_WINDOW = 10
+intervals = []
+for b in breaks:
+    if not intervals:
+        intervals.append([b, b])
+    else:
+        if b - intervals[-1][1] <= MERGE_WINDOW:
+            intervals[-1][1] = b
+        else:
+            intervals.append([b, b])
+
+# 5) Écrire sortie; support=1 car un seul détecteur
+os.makedirs(os.path.dirname(outp), exist_ok=True)
+with open(outp, "w") as out:
+    out.write("start\tend\tsupport\n")
+    for s, e in intervals:
+        out.write("%d\t%d\t1\n" % (s, e))
+
+print("[INFO] Consensus clusters: %d -> %s" % (len(intervals), outp))
+PY
         """
 
 # --- Parentage assignment (BLAST on non-recombinant segments) -----------------
 rule parentage_blast:
     input:
-        msa       = f"{ALIGN_DIR}/dnaA.masked.fasta",
+        msa = f"{ALIGN_DIR}/dnaA.masked.fasta",
         consensus = f"{RECOMB_DIR}/consensus_breakpoints.tsv"
     output:
-        calls = f"{PARENT_DIR}/parent_calls.tsv"
+        calls = "results/parentage/parent_calls.tsv"
     params:
-        seed     = SEEDS["blast"],
+        seed = SEEDS["blast"],
         refs_dir = REFS_DIR
     threads: 8
     resources:
-        mem_mb=RES_HEAVY["mem_mb"],
-        runtime=RES_HEAVY["runtime_min"]
+        mem_mb = RES_HEAVY["mem_mb"],
+        runtime = RES_HEAVY["runtime_min"]
     log: log_of("parentage_blast")
     benchmark: bench_of("parentage_blast")
     conda: "envs/blast.yaml"
     shell:
         r"""
-        mkdir -p {PARENT_DIR}
-        python - << 'PY' > {log} 2>&1
-import os, glob, subprocess, tempfile, shutil, random, pandas as pd
-random.seed({params.seed})
-
-msa_path = "{input.msa}"
-cons_path = "{input.consensus}"
-refs_dir = "{params.refs_dir}"
-out_tsv  = "{output.calls}"
-
-def read_fasta(path):
-    seqs=[]; hdr=None; buf=[]
-    with open(path) as fh:
-        for line in fh:
-            line=line.rstrip()
-            if not line: continue
-            if line.startswith(">"):
-                if hdr is not None: seqs.append((hdr,"".join(buf)))
-                hdr=line[1:].split()[0]; buf=[]
-            else:
-                buf.append(line)
-        if hdr is not None: seqs.append((hdr,"".join(buf)))
-    return seqs
-
-def read_breaks(consensus_path):
-    # expect a TSV; try to pull numeric breakpoints from any column
-    bps=set()
-    with open(consensus_path) as fh:
-        header = fh.readline()
-        for line in fh:
-            toks=line.replace(",","\t").split()
-            for t in toks:
-                try:
-                    v=int(t)
-                    if v>0: bps.add(v)
-                except: pass
-    bps=sorted(bps)
-    return bps
-
-def slice_columns(msa, start, end):
-    s=start-1; e=end
-    return [(sid, seq[s:e]) for sid,seq in msa]
-
-def consensus_of_slice(sliced):
-    if not sliced: return ""
-    L=len(sliced[0][1]); out=[]
-    for i in range(L):
-        freq={}
-        for sid,s in sliced:
-            c=s[i]
-            freq[c]=freq.get(c,0)+1
-        out.append(sorted(freq.items(), key=lambda kv:(-kv[1],kv[0]))[0][0])
-    return "".join(out)
-
-def build_blast_db_if_any(refs_dir, tmpdir):
-    fa_list=sorted(glob.glob(os.path.join(refs_dir,"*.fa"))+
-                   glob.glob(os.path.join(refs_dir,"*.fasta"))+
-                   glob.glob(os.path.join(refs_dir,"*.fna")))
-    if not fa_list: return None
-    cat=os.path.join(tmpdir,"refs.cat.fasta")
-    with open(cat,"w") as out:
-        for fp in fa_list:
-            with open(fp) as fh: out.write(fh.read())
-    db=os.path.join(tmpdir,"refdb")
-    subprocess.run(["makeblastdb","-in",cat,"-dbtype","nucl","-out",db],
-                   check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return db
-
-msa=read_fasta(msa_path)
-if not msa: raise SystemExit("Masked alignment is empty.")
-L=len(msa[0][1])
-
-bps=read_breaks(cons_path)
-cut_points=[bp for bp in bps if 1 <= bp < L]
-
-segments=[]
-prev=1
-for bp in cut_points + [L]:
-    segments.append((prev,bp))
-    prev=bp+1
-
-tmpdir=tempfile.mkdtemp(prefix="blast_parentage_")
-db=None
-try:
-    have_refs=os.path.isdir(refs_dir)
-    if have_refs:
-        try: db=build_blast_db_if_any(refs_dir,tmpdir)
-        except Exception as e: print("[WARN] build DB:", e)
-
-    rows=[]
-    for idx,(a,b) in enumerate(segments, start=1):
-        sliced=slice_columns(msa,a,b)
-        cons=consensus_of_slice(sliced)
-        qfa=os.path.join(tmpdir,f"seg_{idx:03d}.fa")
-        with open(qfa,"w") as o:
-            o.write(f">seg_{idx:03d}_{a}_{b}\n{cons}\n")
-
-        major="NA"; minor="NA"; score="NA"
-        if db and cons:
-            cmd=["blastn","-query",qfa,"-db",db,
-                 "-outfmt","6 qseqid sseqid pident length evalue bitscore qcovs",
-                 "-max_target_seqs","5"]
-            try:
-                cp=subprocess.run(cmd,check=True,text=True,capture_output=True)
-                lines=[ln for ln in cp.stdout.splitlines() if ln.strip()]
-                if lines:
-                    best=lines[0].split("\t")
-                    if len(best)>=7:
-                        major=best[1]; score=best[6]
-                    if len(lines)>1:
-                        second=lines[1].split("\t")
-                        if len(second)>=2: minor=second[1]
-            except Exception as e:
-                print(f"[WARN] BLAST seg {idx}: {e}")
-
-        rows.append((f"{a}-{b}", major, minor, score))
-
-    os.makedirs(os.path.dirname(out_tsv), exist_ok=True)
-    with open(out_tsv,"w") as out:
-        out.write("breakpoint_interval\tmajor_parent\tminor_parent\tscore\n")
-        for r in rows: out.write("\t".join(r)+"\n")
-finally:
-    try: shutil.rmtree(tmpdir, ignore_errors=True)
-    except: pass
-PY
+        set -euo pipefail
+        mkdir -p "$(dirname "{output.calls}")"
+        scripts/python/parentage_blast.py \
+          --msa "{input.msa}" \
+          --consensus "{input.consensus}" \
+          --refs "{params.refs_dir}" \
+          --out "{output.calls}" \
+          --seed {params.seed} \
+          --threads {threads} \
+          > "{log}" 2>&1
         """
+
+
 
 # --- NeighborNet network (R) --------------------------------------------------
 rule neighbornet:
@@ -507,57 +478,64 @@ rule neighbornet:
         pdf_h    = config["network"]["pdf_h"]
     threads: 2
     resources:
-        mem_mb=RES_DEFAULT["mem_mb"],
-        runtime=RES_DEFAULT["runtime_min"]
+        mem_mb = RES_DEFAULT["mem_mb"],
+        runtime = RES_DEFAULT["runtime_min"]
     log: log_of("neighbornet")
     benchmark: bench_of("neighbornet")
     conda: "envs/r-env.yaml"
     shell:
         r"""
         set -euo pipefail
-        mkdir -p {NET_DIR}
 
-        # Lancer le script R
+        outdir="$(dirname "{output.pdf}")"
+        mkdir -p "$outdir"
+        outbase="$outdir/neighborNet"
+
+        # lancer le script R (aucune accolade non-Snakemake dans ce bloc)
         if ! Rscript scripts/R/neighborNet.R \
-          --aln {input.msa} \
-          --out {NET_DIR}/neighborNet \
-          --metadata {input.meta} \
-          --color-map {output.colors} \
+          --aln "{input.msa}" \
+          --out "$outbase" \
+          --metadata "{input.meta}" \
+          --color-map "{output.colors}" \
           --max-tips {params.max_tips} \
           --per-species-cap {params.per_cap} \
           --seed {params.seed} \
           --pdf-width {params.pdf_w} \
           --pdf-height {params.pdf_h} \
-          > {log} 2>&1; then
-          echo "[WARN] R a retourné un code non nul; on tente de récupérer les fichiers." >> {log}
+          > "{log}" 2>&1; then
+          echo "[WARN] R a retourné un code non nul; tentative de récupération des fichiers." >> "{log}"
         fi
 
-        # Cherche récursivement des sorties plausibles puis normalise les noms
-        find {NET_DIR} -maxdepth 3 -type f -iname '*neighbor*net*.pdf' -o -iname '*network*.pdf' | head -n1 | \
-          xargs -r -I{} mv -f "{}" "{output.pdf}" || true
-        find {NET_DIR} -maxdepth 3 -type f -iname '*neighbor*net*.png' -o -iname '*network*.png' | head -n1 | \
-          xargs -r -I{} mv -f "{}" "{output.png}" || true
-        # le color-map est déjà passé en paramètre, mais on prévoit des variantes
+        # rattrapage: chercher des fichiers plausibles et normaliser les noms
+        if [ ! -s "{output.pdf}" ]; then
+          cand_pdf="$(find "$outdir" -maxdepth 3 -type f \( -iname '*neighbor*net*.pdf' -o -iname '*network*.pdf' \) | head -n1 || true)"
+          [ -n "$cand_pdf" ] && mv -f "$cand_pdf" "{output.pdf}" || true
+        fi
+
+        if [ ! -s "{output.png}" ]; then
+          cand_png="$(find "$outdir" -maxdepth 3 -type f \( -iname '*neighbor*net*.png' -o -iname '*network*.png' \) | head -n1 || true)"
+          [ -n "$cand_png" ] && mv -f "$cand_png" "{output.png}" || true
+        fi
+
         if [ ! -s "{output.colors}" ]; then
-          find {NET_DIR} -maxdepth 3 -type f -iname '*taxa*color*.csv' -o -iname '*color*.csv' | head -n1 | \
-            xargs -r -I{} mv -f "{}" "{output.colors}" || true
+          cand_col="$(find "$outdir" -maxdepth 3 -type f \( -iname '*taxa*color*.csv' -o -iname '*color*.csv' \) | head -n1 || true)"
+          [ -n "$cand_col" ] && mv -f "$cand_col" "{output.colors}" || true
         fi
 
-        # Attente courte pour latence FS
+        # courte attente pour latence FS
         tries=0
         while [ $tries -lt 5 ]; do
           if [ -s "{output.pdf}" ] && [ -s "{output.png}" ] && [ -s "{output.colors}" ]; then
-            echo "[OK] neighborNet outputs présents." >> {log}
+            echo "[OK] neighborNet outputs présents." >> "{log}"
             exit 0
           fi
           tries=$((tries+1))
           sleep 2
         done
 
-        echo "[ERROR] Fichiers neighborNet manquants. Vérifie le log R: {log}" >> {log}
+        echo "[ERROR] Fichiers neighborNet manquants. Voir {log}" >> "{log}"
         exit 1
         """
-
 
 
 # --- IQ-TREE ML phylogeny -----------------------------------------------------
