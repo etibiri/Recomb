@@ -1,4 +1,7 @@
-name: cmd-blast
-channels: [bioconda, conda-forge, defaults]
+name: blast
+channels:
+  - bioconda
+  - conda-forge
 dependencies:
-  - blast
+  - blast>=2.13
+  - python>=3.9
